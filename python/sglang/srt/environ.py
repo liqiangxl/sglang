@@ -1805,6 +1805,12 @@ class Envs:
     SGLANG_OPT_SPEC_COMPACT_VERIFY_SAMPLING = EnvBool(
         SGLANG_ENABLE_NV_MEGA_RUNTIME_OPTIMIZATION.get
     )
+    # That compact branch with fused kernels around the top-k (compact_topk_sampling.py):
+    # the same exponential draws, one kernel after the top-k without top-p, and with top-p
+    # main's own compiled normalisation between a sort kernel and a draw kernel; PDL where
+    # supported. Explicit only (does not follow the NVIDIA runtime master switch): tokens
+    # can differ from the reference at exact logit ties inside the support (tie order).
+    SGLANG_OPT_SPEC_FUSED_COMPACT_VERIFY_SAMPLING = EnvBool(False)
     # A sampled verify result (predict, accept_index, num_correct_drafts) is one int32
     # buffer, broadcast to the TP group once.
     SGLANG_OPT_SPEC_PACKED_VERIFY_BCAST = EnvBool(

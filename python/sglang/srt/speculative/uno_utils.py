@@ -532,6 +532,56 @@ def sample_uno_tree_target_tokens(
     return _sample_from_support(support_ids, support_probs)
 
 
+def compact_topk_fused_supported(next_token_logits: torch.Tensor) -> bool:
+    """Whether sample_uno_tree_target_tokens_fused can take these verify logits:
+    FP32 CUDA rows, a vocabulary below 2**25 (the sort kernel's key) and fast_sample's
+    exponential race (not torch.multinomial)."""
+    from sglang.srt.environ import envs
+
+    return bool(
+        next_token_logits.is_cuda
+        and next_token_logits.dim() == 2
+        and next_token_logits.dtype == torch.float32
+        and next_token_logits.shape[-1] <= (1 << 25)
+        and envs.SGLANG_OPT_USE_GUMBEL_SAMPLE.get()
+    )
+
+
+def sample_uno_tree_target_tokens_fused(
+    *,
+    next_token_logits: torch.Tensor,
+    sampling_info: Any,
+    batch_size: int,
+    verify_width: int,
+    max_top_k: int,
+) -> torch.Tensor:
+    """sample_uno_tree_target_tokens with fused kernels around the top-k
+    (SGLANG_OPT_SPEC_FUSED_COMPACT_VERIFY_SAMPLING); [batch_size, verify_width] int64.
+    Without top-p, one kernel after the top-k; with top-p (only when sampled), the
+    support sorted in one kernel and normalised by _sparse_target_support_from_topk
+    itself, then one kernel for the draw (compact_topk_sampling)."""
+    from sglang.kernels.jit.utils import is_arch_support_pdl
+    from sglang.kernels.ops.speculative.compact_topk_sampling import (
+        compact_topk_sample,
+    )
+
+    top_ps = (
+        sampling_info.top_ps
+        if bool(getattr(sampling_info, "need_top_p_sampling", False))
+        else None
+    )
+    tokens = compact_topk_sample(
+        next_token_logits,
+        temperatures=sampling_info.temperatures,
+        top_ks=sampling_info.top_ks,
+        top_ps=top_ps,
+        verify_width=verify_width,
+        max_top_k=max_top_k,
+        pdl=is_arch_support_pdl(),
+    )
+    return tokens.view(batch_size, verify_width)
+
+
 def pack_uno_tree_result(
     *,
     clean_root_tokens: torch.Tensor,

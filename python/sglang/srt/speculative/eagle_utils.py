@@ -66,6 +66,8 @@ _is_xpu = is_xpu()
 _is_cpu = is_cpu()
 _COMPACT_VERIFY_SAMPLING = envs.SGLANG_OPT_SPEC_COMPACT_VERIFY_SAMPLING.get()
 _PACKED_VERIFY_BCAST = envs.SGLANG_OPT_SPEC_PACKED_VERIFY_BCAST.get()
+_COMPACT_TOPK_FUSED = envs.SGLANG_OPT_SPEC_FUSED_COMPACT_VERIFY_SAMPLING.get()
+_compact_topk_fused_logged = False
 
 # The binding defaults probe this explicit capability once instead of relying on
 # exception handling in the hot path.  Runtime itself remains independent of the
@@ -985,16 +987,36 @@ def eagle_sample(
             )
     elif sparse:
         from sglang.srt.speculative.uno_utils import (
+            compact_topk_fused_supported,
             sample_uno_tree_target_tokens,
+            sample_uno_tree_target_tokens_fused,
         )
 
-        target_predict = sample_uno_tree_target_tokens(
-            next_token_logits=next_token_logits,
-            sampling_info=sampling_info,
-            batch_size=bs,
-            verify_width=verify_input.draft_token_num,
-            max_top_k=uno_target_max_top_k,
-        )
+        if _COMPACT_TOPK_FUSED and compact_topk_fused_supported(next_token_logits):
+            global _compact_topk_fused_logged
+            if not _compact_topk_fused_logged:
+                _compact_topk_fused_logged = True
+                logger.info(
+                    "SGLANG_OPT_SPEC_FUSED_COMPACT_VERIFY_SAMPLING engaged: compact "
+                    "top-k verify sampling with fused kernels (%d rows, top-k %d)",
+                    next_token_logits.shape[0],
+                    uno_target_max_top_k,
+                )
+            target_predict = sample_uno_tree_target_tokens_fused(
+                next_token_logits=next_token_logits,
+                sampling_info=sampling_info,
+                batch_size=bs,
+                verify_width=verify_input.draft_token_num,
+                max_top_k=uno_target_max_top_k,
+            )
+        else:
+            target_predict = sample_uno_tree_target_tokens(
+                next_token_logits=next_token_logits,
+                sampling_info=sampling_info,
+                batch_size=bs,
+                verify_width=verify_input.draft_token_num,
+                max_top_k=uno_target_max_top_k,
+            )
         if fused_verify:
             _chain_accept(
                 predict=predict,
